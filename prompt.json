@@ -1,0 +1,156 @@
+{
+  "version": "1.2.0",
+  "updated_at": "2025-05-14T12:00:00+09:00",
+  "changelog": [
+    {
+      "version": "1.2.0",
+      "date": "2025-05-14",
+      "notes": "分析セクションに alternatives を追加、システムプロンプトを箇条書き化"
+    },
+    {
+      "version": "1.1.0",
+      "date": "2025-03-01",
+      "notes": "多言語出力設定の強化"
+    }
+  ],
+  "title": "汎用ディスカッション要約プロンプト",
+  "description": "会議やワークショップ、オンライン討論など、あらゆる分野の議論を高精度に要約・記録し、必要に応じて多言語出力、リスク分析、意思決定支援まで行うテンプレート。",
+  "system_prompt": "あなたは次の役割を担うエグゼクティブアシスタントです:\n1. ディープテックスタートアップ企業の経営・事業運営全般に精通する\n2. 財務・経理・人事・労務・法務・知財・総務・ITシステムまで幅広い専門知識を有する\n3. 議論の文字起こしから話者の意図と文脈を深く理解し、本質的な情報を抽出する\n4. 以下の出力スキーマに完全に準拠して議事録を作成する\n\n以下の順序と形式を厳守し、JSON オブジェクトとして出力してください。",
+  "settings": {
+    "model": "${SUMMARY_MODEL_NAME}",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "top_p": 1.0
+  },
+  "i18n": {
+    "default_language": "${DEFAULT_LANGUAGE:-ja}",
+    "auto_detect_language": true,
+    "translate_to": [],
+    "translate_behavior": "もし元言語が default_language と異なる場合、default_language に翻訳してから要約する"
+  },
+  "logging": {
+    "level": "INFO",
+    "include_request_id": true,
+    "format": "[{timestamp}] {level} [{request_id}]: {message}"
+  },
+  "output_schema": [
+    {
+      "section": "メタ情報",
+      "fields": [
+        {
+          "name": "request_id",
+          "type": "string",
+          "required": true,
+          "description": "一意なリクエストID"
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": true,
+          "description": "セッションID"
+        },
+        {
+          "name": "generated_at",
+          "type": "datetime",
+          "required": true,
+          "description": "生成日時 (ISO 8601)"
+        },
+        {
+          "name": "model_used",
+          "type": "string",
+          "required": true,
+          "description": "使用したモデル名"
+        },
+        {
+          "name": "language",
+          "type": "string",
+          "required": true,
+          "description": "出力言語コード"
+        },
+        {
+          "name": "discussion_title",
+          "type": "string",
+          "required": false,
+          "description": "議論のタイトル（任意）"
+        }
+      ]
+    },
+    {
+      "section": "要約",
+      "fields": [
+        {
+          "name": "overview",
+          "type": "string",
+          "required": true,
+          "description": "議論の概要"
+        },
+        {
+          "name": "key_findings",
+          "type": "list<string>",
+          "required": true,
+          "description": "重要な発見・結論"
+        },
+        {
+          "name": "action_items",
+          "type": "list<string>",
+          "required": false,
+          "description": "アクションアイテム（必要時）"
+        }
+      ]
+    },
+    {
+      "section": "分野ごとのまとめ",
+      "fields": [
+        {
+          "name": "specialized_topics",
+          "type": "list<string>",
+          "required": false,
+          "description": "専門分野別の要点"
+        },
+        {
+          "name": "agenda_and_discussions",
+          "type": "list<string>",
+          "required": false,
+          "description": "議題と議論内容の要約"
+        },
+        {
+          "name": "topic_decisions",
+          "type": "list<string>",
+          "required": false,
+          "description": "各分野・議題での決定事項"
+        }
+      ]
+    },
+    {
+      "section": "分析",
+      "fields": [
+        {
+          "name": "risks",
+          "type": "list<string>",
+          "required": false,
+          "description": "リスク要因"
+        },
+        {
+          "name": "alternatives",
+          "type": "list<string>",
+          "required": false,
+          "description": "代替案・検討事項"
+        },
+        {
+          "name": "final_decisions",
+          "type": "list<string>",
+          "required": false,
+          "description": "最終的な意思決定事項"
+        }
+      ]
+    }
+  ],
+  "style_guidelines": [
+    "事実ベースで記述し、'～のように思われる' などの主観的推測を含めない",
+    "専門用語は初出時に括弧内で定義を示す（例: 『SMB（サーバーメッセージブローカー）』）",
+    "必要に応じて箇条書きを使用し、要点を明確にする（例: ・主要結論 ・次のステップ）",
+    "文体はビジネスレポート形式とし、敬語を避け標準形で記述する"
+  ],
+  "context_instructions": "以下の `<<TRANSCRIPT>>` プレースホルダに文字起こし全文が挿入されます。全文を読み込み、上記スキーマに完全準拠して出力してください。",
+  "transcript_placeholder": "<<TRANSCRIPT>>"
+}
