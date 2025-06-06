@@ -55,32 +55,43 @@ except Exception as e:
     client = None
 
 def ensure_dir(directory: Path):
+    """ディレクトリがなければ作成する"""
     directory.mkdir(parents=True, exist_ok=True)
 
 def get_output_filename(input_file: Path, output_dir: Path) -> Path:
+    """入力ファイル名に対応する .txt 出力パスを返す"""
     return output_dir / (input_file.stem + ".txt")
 
 def convert_audio_for_api(input_file: Path, temp_dir: Path) -> list[Path] | None:
+    """
+    1) モノラル16kHz・MP3(128kbps) に再エンコード
+    2) 25MB超のときは秒数 & モデル長制限考慮し分割
+    3) Path のリストを返す。失敗時は None
+    """
     stem = input_file.stem
     tmp_mp3 = temp_dir / f"{stem}_for_api.{TARGET_AUDIO_FORMAT}"
+
     try:
+        # 再エンコード
         print(f"再エンコード: {input_file.name} → モノラル16kHz MP3(128kbps)")
         cmd = [
             "ffmpeg", "-y", "-i", str(input_file),
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-b:a", "128k",
-            "-ac", "1",
-            "-ar", "16000",
+            "-vn",                # ビデオ除去
+            "-acodec", "libmp3lame", # MP3エンコーダー
+            "-b:a", "128k",       # ビットレート
+            "-ac", "1",           # モノラル
+            "-ar", "16000",       # サンプリングレート
             str(tmp_mp3)
         ]
         subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="ignore", text=True, check=True)
 
         size = tmp_mp3.stat().st_size
+        # 上限内ならそのまま返却
         if size < MAX_FILE_SIZE_BYTES:
             print(f"変換後サイズ: {size/(1024*1024):.2f}MB (25MB 以下)")
             return [tmp_mp3]
 
+        # サイズ超過時は自動分割
         bytes_per_sec = 128_000 // 8
         file_sec_limit = floor(MAX_FILE_SIZE_BYTES / bytes_per_sec) - SIZE_MARGIN_SEC
         model_sec_limit = MAX_MODEL_SECONDS - MODEL_MARGIN_SEC
@@ -95,8 +106,14 @@ def convert_audio_for_api(input_file: Path, temp_dir: Path) -> list[Path] | None
             "-c", "copy",
             str(pattern)
         ]
-        subprocess.run(cmd_split, capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True)
+        subprocess.run(cmd_split,
+                       capture_output=True,
+                       text=True,
+                       encoding="utf-8",
+                       errors="ignore",
+                       check=True)
 
+        # 元の大きいファイルを削除
         tmp_mp3.unlink()
         chunks = sorted(temp_dir.glob(f"{stem}_*_for_api.{TARGET_AUDIO_FORMAT}"))
         print(f"分割完了: {len(chunks)} チャンク生成")
@@ -142,7 +159,12 @@ def transcribe_audio_with_openai(
                     "ffmpeg", "-y", "-i", str(audio_path),
                     "-vn", "-ac", "1", "-ar", "16000",
                     "-c:a", "pcm_s16le", str(wav_path)
-                ], capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True)
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",    # 出力を UTF-8 として読み込む
+                errors="ignore",     # デコードできないバイトは無視
+                check=True)
                 return transcribe_audio_with_openai(wav_path, model, language, prompt)
             finally:
                 wav_path.unlink(missing_ok=True)
@@ -171,12 +193,17 @@ def main():
         print("API キー設定エラー → 終了")
         return
 
+    # ffmpeg の確認
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
     except:
         print("エラー: ffmpeg が見つかりません")
         return
 
+    # CLI 引数で言語・プロンプト取得（'-ja' のようなハイフン付き指定に対応）
+    default_lang = os.getenv("DEFAULT_LANGUAGE")
+    cli_lang = None
+    prompt_cli = None
     args = sys.argv[1:]
     single_file_to_process = None
     supported_suffixes = [
@@ -192,7 +219,9 @@ def main():
         if single_file_to_process:
             break
 
+    # 単一ファイルモードかフォルダモードか判定
     if single_file_to_process:
+        # 単一ファイルモード
         if not single_file_to_process.exists() or not single_file_to_process.is_file():
             print(f"エラー: 指定されたファイルが見つからない、またはファイルではありません: {single_file_to_process}")
             return
@@ -201,14 +230,9 @@ def main():
         os.environ["INPUT_DIR"] = str(parent_dir)
         os.environ["OUTPUT_DIR"] = str(parent_dir)
         os.environ["SUMMARY_DIR"] = str(parent_dir)
-        temp_subdir = parent_dir / f"temp_processing_{single_file_to_process.stem}"
-        os.environ["TEMP_DIR"] = str(temp_subdir)
+        # バッチや環境変数で TEMP_DIR を渡していない場合は、後で固定ロジックで設定する
 
-        process_only_this = True
-
-        default_lang = os.getenv("DEFAULT_LANGUAGE")
-        cli_lang = None
-        prompt_cli = None
+        # 言語・プロンプトのCLI引数処理
         arg_list = args[:]
         first = arg_list[0]
         lang_candidate = first.lstrip('-').lower()
@@ -228,21 +252,17 @@ def main():
         print(f"書き起こしモデル: {MODEL_NAME_FROM_ENV} | 要約モデル: {SUMMARY_MODEL_NAME}")
 
     else:
-        process_only_this = False
-        default_lang = os.getenv("DEFAULT_LANGUAGE")
-        cli_lang = None
-        prompt_cli = None
-        args_lp = sys.argv[1:]
-        if args_lp:
-            lang_candidate = args_lp[0].lstrip('-')
-            if len(args_lp) == 1 and lang_candidate.isalpha() and len(lang_candidate) <= 3:
-                cli_lang = lang_candidate.lower()
-            elif len(args_lp) >= 2 and lang_candidate.isalpha() and len(lang_candidate) <= 3:
-                cli_lang = lang_candidate.lower()
-                prompt_cli = " ".join(args_lp[1:])
+        # フォルダモード
+        if args:
+            # フォルダモードでも先頭引数が言語指定かどうかチェック
+            lang_candidate = args[0].lstrip('-').lower()
+            if len(args) == 1 and lang_candidate.isalpha() and len(lang_candidate) <= 3:
+                cli_lang = lang_candidate
+            elif len(args) >= 2 and lang_candidate.isalpha() and len(lang_candidate) <= 3:
+                cli_lang = lang_candidate
+                prompt_cli = " ".join(args[1:])
             else:
-                prompt_cli = " ".join(args_lp)
-
+                prompt_cli = " ".join(args)
         target_lang = cli_lang or default_lang
         final_prompt = prompt_cli or os.getenv("DEFAULT_PROMPT")
 
@@ -251,11 +271,22 @@ def main():
             print(f"プロンプト: \"{final_prompt}\"")
         print(f"書き起こしモデル: {MODEL_NAME_FROM_ENV} | 要約モデル: {SUMMARY_MODEL_NAME}")
 
-    INPUT_DIR = Path(os.getenv("INPUT_DIR", "./input"))
-    OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./output"))
-    TEMP_DIR = Path(os.getenv("TEMP_DIR", "./temp_processing"))
+    # 環境変数からディレクトリを取得
+    INPUT_DIR   = Path(os.getenv("INPUT_DIR", "./input"))
+    OUTPUT_DIR  = Path(os.getenv("OUTPUT_DIR", "./output"))
     SUMMARY_DIR = Path(os.getenv("SUMMARY_DIR", "./output/summaries"))
+    # TEMP_DIR は単一ファイルモードかどうかで後述
+    default_temp = Path(os.getenv("TEMP_DIR", "./temp_processing"))
 
+    # **TEMP_DIR を「スクリプト直下」に置くロジック**
+    if single_file_to_process:
+        stem = single_file_to_process.stem
+        script_folder = Path(__file__).parent
+        TEMP_DIR = script_folder / f"temp_processing_{stem}"
+    else:
+        TEMP_DIR = default_temp
+
+    # ディレクトリを作成
     ensure_dir(INPUT_DIR)
     ensure_dir(OUTPUT_DIR)
     ensure_dir(TEMP_DIR)
@@ -263,7 +294,8 @@ def main():
 
     processed = skipped = failed = 0
 
-    if process_only_this:
+    if single_file_to_process:
+        # 単一ファイルモードでの処理
         item = single_file_to_process
         print(f"\n--- {item.name} 処理開始（単一ファイルモード）---")
         if item.suffix.lower() not in supported_suffixes:
@@ -307,6 +339,7 @@ def main():
                         print(f"要約失敗: {e}")
                     processed += 1
     else:
+        # フォルダモードでの一括処理
         files = list(INPUT_DIR.iterdir())
         if not files:
             print(f"入力フォルダ {INPUT_DIR} が空です")
@@ -359,6 +392,7 @@ def main():
 
             processed += 1
 
+    # TEMP_DIR のクリーンアップ
     if TEMP_DIR.exists():
         for tmp in TEMP_DIR.iterdir():
             try:
@@ -374,6 +408,7 @@ def main():
         except Exception as e:
             print(f"警告: 一時ディレクトリ削除失敗: {e}")
 
+    # 完了ログ
     print("======= 完了 =======")
     print(f"成功: {processed}  スキップ: {skipped}  失敗: {failed}")
     print("===================")
